@@ -5,11 +5,14 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/sendfile.h>
 
 #define SERV_PORT "8097" 
 #define BACKLOG 10
@@ -25,13 +28,19 @@ void sigchld_handler(int s)
 
 int main(int argc, char **argv)
 {
-    int socket_fd, status, new_fd, client_fd;
+    int socket_fd, status, new_fd, client_fd, send_fd;
     struct addrinfo hints;
     struct addrinfo *servinfo;
     struct sockaddr_storage client_addr;
     struct sigaction sa;
     socklen_t sin_size;
+    char buffer[512];
+    char command[64];
+    char path[512];
+    char version[64];
     int yes = 1;
+    int num_bytes, file_size;
+    struct stat stat_buf;
     
     //TODO:read in config file here
 
@@ -88,10 +97,47 @@ int main(int argc, char **argv)
         }
 
         if(!fork()) {
-            close(socket_fd);    
-            if (-1 == send(client_fd, "HELLO WORLD", 11, 0)) {
-                perror("send");
+            close(socket_fd);
+            //Read initial header      
+            if (-1 == (num_bytes = recv(client_fd, buffer, 511, 0))) {
+                perror("read header");
+                close(client_fd);
+                exit(0);
             }
+
+            buffer[num_bytes] = '\0';
+            //parse initial header
+            sscanf(buffer, "%s %s %s %*s", command, path, version);
+            printf("The Header is: %s\n", buffer);
+            printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
+            
+            send(client_fd, "HTTP/1.1 200 OK\n", 33, 0);
+            send(client_fd, "Content-Type: text/html\n", 29, 0); 
+
+            //fd getfile
+            send_fd = open("/home/cpp/csci4273/PA1/www/index.html", O_RDONLY);
+            if(-1 == send_fd) {
+                fprintf(stderr, "Failed to open file\n");
+            }
+
+            fstat(send_fd, &stat_buf);
+            sprintf(buffer, "HTTP/1.1 200 OK\n Content-Type: text/html\n Content-Length: %i\n", stat_buf.st_size);
+            send(client_fd, buffer, strlen(buffer), 0);
+            off_t offset = 0;
+            int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
+            if( -1 == rc) {
+                fprintf(stderr, "failed to sendfile\n");
+            }
+
+            if (rc != stat_buf.st_size) {
+            
+                fprintf(stderr, "didnt send the entire buffer\n");
+            }
+
+            
+            //if (-1 == send()) {
+            //    perror("send");
+            //}
             close(client_fd);
             exit(0);
 
