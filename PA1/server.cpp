@@ -25,7 +25,6 @@ void sigchld_handler(int s)
 
     errno = saved_errno;
 }
-
 int main(int argc, char **argv)
 {
     int socket_fd, status, new_fd, client_fd, send_fd;
@@ -41,6 +40,7 @@ int main(int argc, char **argv)
     int yes = 1;
     int num_bytes, file_size;
     struct stat stat_buf;
+    char fullPath[64] = {'.'};
     
     //TODO:read in config file here
 
@@ -110,12 +110,10 @@ int main(int argc, char **argv)
             sscanf(buffer, "%s %s %s %*s", command, path, version);
             printf("The Header is: %s\n", buffer);
             printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
-            
-            send(client_fd, "HTTP/1.1 200 OK\n", 33, 0);
-            send(client_fd, "Content-Type: text/html\n", 29, 0); 
+            strcat(fullPath, path);
 
             //fd getfile
-            send_fd = open("/home/cpp/csci4273/PA1/www/index.html", O_RDONLY);
+            send_fd = open(fullPath, O_RDONLY);
             if(-1 == send_fd) {
                 fprintf(stderr, "Failed to open file\n");
             }
