@@ -17,6 +17,45 @@
 #define SERV_PORT "8097" 
 #define BACKLOG 10
 
+void getFullFilePath(char *path, char *fullFilePath, char *type)
+{
+    size_t len = strlen(path);
+    getcwd(fullFilePath, 64);
+    fprintf(stderr, "path[len-1]: %c, path[len]: %c\n", path[len-1], path[len]);
+    if ('/' == path[len-1]) {
+        strcat(fullFilePath, "/index.html");
+    }
+    else {
+        strcat(fullFilePath, path);
+    }
+
+    if(NULL != strstr(fullFilePath, ".html")) {
+        strcpy(type, "text/html\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".htm")) {
+        strcpy(type, "text/html\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".png")) { 
+        strcpy(type, "image/png\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".gif")) { 
+        strcpy(type, "image/gif\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".jpg")) { 
+        strcpy(type, "image/jpg\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".css")) { 
+        strcpy(type, "text/css\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".js")) { 
+        strcpy(type, "text/javascript\0");
+    }
+    else if (NULL != strstr(fullFilePath, "x-icon")) { 
+        strcpy(type, "image/x-icon\0");
+    }
+
+}
+
 void sigchld_handler(int s) 
 {
     int saved_errno = errno;
@@ -32,18 +71,19 @@ int main(int argc, char **argv)
     struct addrinfo *servinfo;
     struct sockaddr_storage client_addr;
     struct sigaction sa;
+    struct stat stat_buf;
     socklen_t sin_size;
-    char buffer[512];
-    char command[64];
+    char header_buffer[512];
+    char command[512];
     char path[512];
     char version[64];
+    char fullPath[512];
+    char type[64];
     int yes = 1;
     int num_bytes, file_size;
-    struct stat stat_buf;
-    char fullPath[64] = {'.'};
-    
-    //TODO:read in config file here
 
+    //TODO:read in config file here
+    getcwd(fullPath, 64);
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM; 
@@ -99,43 +139,44 @@ int main(int argc, char **argv)
         if(!fork()) {
             close(socket_fd);
             //Read initial header      
-            if (-1 == (num_bytes = recv(client_fd, buffer, 511, 0))) {
+            if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
                 perror("read header");
                 close(client_fd);
                 exit(0);
             }
 
-            buffer[num_bytes] = '\0';
+            header_buffer[num_bytes] = '\0';
             //parse initial header
-            sscanf(buffer, "%s %s %s %*s", command, path, version);
-            printf("The Header is: %s\n", buffer);
+            sscanf(header_buffer, "%s %s %s %*s", command, path, version);
+            printf("The Header is: %s\n", header_buffer);
             printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
-            strcat(fullPath, path);
 
-            //fd getfile
+            getFullFilePath(path, fullPath, type);
+            fprintf(stderr,"Full File Path: %s\n", fullPath);
+            fprintf(stderr, "Type: %s\n", type);
+
+
             send_fd = open(fullPath, O_RDONLY);
             if(-1 == send_fd) {
                 fprintf(stderr, "Failed to open file\n");
             }
-
             fstat(send_fd, &stat_buf);
-            sprintf(buffer, "HTTP/1.1 200 OK\n Content-Type: text/html\n Content-Length: %i\n", stat_buf.st_size);
-            send(client_fd, buffer, strlen(buffer), 0);
+
+            sprintf(header_buffer, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %i\r\nConnection: keep-alive\r\n\r\n", type, stat_buf.st_size);
+            fprintf(stderr, "\n\nRESPONSE\n\n%s\n",header_buffer);
+            send(client_fd, header_buffer, strlen(header_buffer), 0);
+            
             off_t offset = 0;
             int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
             if( -1 == rc) {
                 fprintf(stderr, "failed to sendfile\n");
-            }
+            }            
 
             if (rc != stat_buf.st_size) {
-            
-                fprintf(stderr, "didnt send the entire buffer\n");
+               fprintf(stderr, "didnt send the entire buffer\n");
             }
+            close(send_fd);
 
-            
-            //if (-1 == send()) {
-            //    perror("send");
-            //}
             close(client_fd);
             exit(0);
 
