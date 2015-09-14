@@ -53,6 +53,10 @@ void getFullFilePath(char *path, char *fullFilePath, char *type)
     else if (NULL != strstr(fullFilePath, "x-icon")) { 
         strcpy(type, "image/x-icon\0");
     }
+    else {
+        //not supported send 503?
+    }
+
 
 }
 
@@ -66,12 +70,13 @@ void sigchld_handler(int s)
 }
 int main(int argc, char **argv)
 {
-    int socket_fd, status, new_fd, client_fd, send_fd;
+    int socket_fd, status, client_fd, send_fd;
     struct addrinfo hints;
     struct addrinfo *servinfo;
     struct sockaddr_storage client_addr;
     struct sigaction sa;
     struct stat stat_buf;
+    struct timeval timeout;
     socklen_t sin_size;
     char header_buffer[512];
     char command[512];
@@ -80,7 +85,11 @@ int main(int argc, char **argv)
     char fullPath[512];
     char type[64];
     int yes = 1;
-    int num_bytes, file_size;
+    int num_bytes;
+    
+
+    timeout.tv_sec = 10;
+    timeout.tv_usec = 0;
 
     //TODO:read in config file here
     getcwd(fullPath, 64);
@@ -100,7 +109,7 @@ int main(int argc, char **argv)
     }
 
     if ( -1 == setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))){
-        fprintf(stderr, "setsockopt failed");
+        fprintf(stderr, "setsockopt:1 failed");
     }
 
     if (-1 == (bind(socket_fd, servinfo->ai_addr, servinfo->ai_addrlen))){
@@ -123,7 +132,7 @@ int main(int argc, char **argv)
         perror("sigaction");
         exit(1);
     }
-
+    size_t fork_num = 0;
     while(1)
     {
                 
@@ -135,51 +144,74 @@ int main(int argc, char **argv)
             perror("accept");
             exit(1);
         }
-
+        fork_num++;
         if(!fork()) {
             close(socket_fd);
-            //Read initial header      
+            //Read initial header
+            fprintf(stderr, "\n\n\n\n\n\n\n\n FORKNUM: %i \n\n\n\n\n\n\n", fork_num);
+            if ( -1 == setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof(timeout))) {
+                fprintf(stderr, "setsockopt:2 failed");
+            }
+
             if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
+
                 perror("read header");
                 close(client_fd);
                 exit(0);
             }
-
-            header_buffer[num_bytes] = '\0';
-            //parse initial header
-            sscanf(header_buffer, "%s %s %s %*s", command, path, version);
-            printf("The Header is: %s\n", header_buffer);
-            printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
-
-            getFullFilePath(path, fullPath, type);
-            fprintf(stderr,"Full File Path: %s\n", fullPath);
-            fprintf(stderr, "Type: %s\n", type);
-
-
-            send_fd = open(fullPath, O_RDONLY);
-            if(-1 == send_fd) {
-                fprintf(stderr, "Failed to open file\n");
-            }
-            fstat(send_fd, &stat_buf);
-
-            sprintf(header_buffer, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %i\r\nConnection: keep-alive\r\n\r\n", type, stat_buf.st_size);
-            fprintf(stderr, "\n\nRESPONSE\n\n%s\n",header_buffer);
-            send(client_fd, header_buffer, strlen(header_buffer), 0);
             
-            off_t offset = 0;
-            int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
-            if( -1 == rc) {
-                fprintf(stderr, "failed to sendfile\n");
-            }            
+            while(1){
 
-            if (rc != stat_buf.st_size) {
-               fprintf(stderr, "didnt send the entire buffer\n");
+                header_buffer[num_bytes] = '\0';
+                //parse initial header
+                sscanf(header_buffer, "%s %s %s %*s", command, path, version);
+                printf("The Header is: %s\n", header_buffer);
+                printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
+                
+                getFullFilePath(path, fullPath, type);
+                fprintf(stderr,"Full File Path: %s\n", fullPath);
+                fprintf(stderr, "Type: %s\n", type);
+
+
+                send_fd = open(fullPath, O_RDONLY);
+                if(-1 != send_fd) {
+
+                    fstat(send_fd, &stat_buf);
+
+                    sprintf(header_buffer, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\nConnection: keep-alive\r\n\r\n", type, stat_buf.st_size);
+                    fprintf(stderr, "\n\nRESPONSE\n\n%s\n",header_buffer);
+                    send(client_fd, header_buffer, strlen(header_buffer), 0);
+                    
+                    off_t offset = 0;
+                    int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
+                    if( -1 == rc) {
+                        fprintf(stderr, "failed to sendfile\n");
+                    }            
+
+                    if (rc != stat_buf.st_size) {
+                       fprintf(stderr, "didnt send the entire buffer\n");
+                    }
+
+                } else {
+                    fprintf(stderr, "Failed to open file\n");
+                }
+
+                
+                if (NULL == strstr(version, "HTTP/1.1")) {  
+                    close(send_fd);
+                    close(client_fd);
+                    exit(0);
+                }
+
+                close(send_fd);
+
+                if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
+                    perror("timeout or failed to recv: probably should check the errno\n");
+                    close(client_fd);
+                    exit(0);
+                }
+
             }
-            close(send_fd);
-
-            close(client_fd);
-            exit(0);
-
         }
 
         close(client_fd);
