@@ -17,7 +17,7 @@
 #define SERV_PORT "8097" 
 #define BACKLOG 10
 
-void getFullFilePath(char *path, char *fullFilePath, char *type)
+int getFullFilePath(char *path, char *fullFilePath, char *type)
 {
     size_t len = strlen(path);
     getcwd(fullFilePath, 64);
@@ -55,7 +55,10 @@ void getFullFilePath(char *path, char *fullFilePath, char *type)
     }
     else {
         //not supported send 503?
+        return -1;
     }
+
+    return 0;
 
 
 }
@@ -67,6 +70,15 @@ void sigchld_handler(int s)
     while(waitpid(-1, NULL, WNOHANG) > 0);
 
     errno = saved_errno;
+}
+
+// get sockaddr, IPv4 or IPv6:
+ void *get_in_addr(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET) {
+       return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 int main(int argc, char **argv)
 {
@@ -86,6 +98,7 @@ int main(int argc, char **argv)
     char type[64];
     int yes = 1;
     int num_bytes;
+    char s[INET6_ADDRSTRLEN];
     
 
     timeout.tv_sec = 10;
@@ -144,16 +157,10 @@ int main(int argc, char **argv)
             exit(1);
         }
 
-        
-        if (-1 == listen(socket_fd, BACKLOG)) {
-            perror("listen");
-            exit(1);
-        }
-            fork_num++;
         if(!fork()) {
             close(socket_fd);
             //Read initial header
-            fprintf(stderr, "\n\n\n\n\n\n\n\n FORKNUM: %i \n\n\n\n\n\n\n", fork_num);
+           // fprintf(stderr, "\n\n\n\n\n\n\n\n FORKNUM: %i \n\n\n\n\n\n\n", fork_num);
             if ( -1 == setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof(timeout))) {
                 fprintf(stderr, "setsockopt:2 failed");
             }
@@ -173,34 +180,52 @@ int main(int argc, char **argv)
                 printf("The Header is: %s\n", header_buffer);
                 printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
                 
-                getFullFilePath(path, fullPath, type);
-                fprintf(stderr,"Full File Path: %s\n", fullPath);
-                fprintf(stderr, "Type: %s\n", type);
+               if (!getFullFilePath(path, fullPath, type)) {
+                    //503 unsupported type
+               
+                    fprintf(stderr,"Full File Path: %s\n", fullPath);
+                    fprintf(stderr, "Type: %s\n", type);
 
 
-                send_fd = open(fullPath, O_RDONLY);
-                if(-1 != send_fd) {
+                    send_fd = open(fullPath, O_RDONLY);
+                    if(-1 != send_fd) {
 
-                    fstat(send_fd, &stat_buf);
+                        fstat(send_fd, &stat_buf);
+                        if (strstr(version, "HTTP/1.1")) {
+                             sprintf(header_buffer, "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\nConnection: keep-alive\r\n\r\n",version,  type, stat_buf.st_size);
+                        } else if (strstr(version, "HTTP/1.0"))  {
+                             sprintf(header_buffer, "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\n\r\n",version,  type, stat_buf.st_size);
+                        } else {
+                            //POORLY FORMATED HEADER
+                            sprintf(header_buffer, "%s 400 Invalid HTTP-Version: %s", version, version);
+                        }
+                        send(client_fd, header_buffer, strlen(header_buffer), 0);
+                        
+                        off_t offset = 0;
+                        int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
+                        if( -1 == rc) {
+                            fprintf(stderr, "failed to sendfile\n");
+                        }            
 
-                    sprintf(header_buffer, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\nConnection: keep-alive\r\n\r\n", type, stat_buf.st_size);
-                    fprintf(stderr, "\n\nRESPONSE\n\n%s\n",header_buffer);
-                    send(client_fd, header_buffer, strlen(header_buffer), 0);
-                    
-                    off_t offset = 0;
-                    int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
-                    if( -1 == rc) {
-                        fprintf(stderr, "failed to sendfile\n");
-                    }            
+                        if (rc != stat_buf.st_size) {
+                           fprintf(stderr, "didnt send the entire buffer\n");
+                        }
 
-                    if (rc != stat_buf.st_size) {
-                       fprintf(stderr, "didnt send the entire buffer\n");
+                    } else {
+                        fprintf(stderr, "Failed to open file\n");
+                        //send file DNE
+                        sprintf(header_buffer, "%s 404 Not Found: %s", version, fullPath);
+
+                        send(client_fd, header_buffer, strlen(header_buffer), 0); 
                     }
 
                 } else {
-                    fprintf(stderr, "Failed to open file\n");
+                    //send file UNSUPPORTED
+                    sprintf(header_buffer, "%s 501 Not Implemented: %s", version, fullPath);
+                    send(client_fd, header_buffer, strlen(header_buffer), 0);
                 }
 
+                fprintf(stderr, "\n\nRESPONSE\n\n%s\n\n",header_buffer);
                 
                 if (NULL == strstr(version, "HTTP/1.1")) {  
                     close(send_fd);
@@ -211,7 +236,7 @@ int main(int argc, char **argv)
                 close(send_fd);
 
                 if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
-                    perror("timeout or failed to recv: probably should check the errno\n");
+                    fprintf(stderr, "timeout or failed to recv\n");
                     close(client_fd);
                     exit(0);
                 }
