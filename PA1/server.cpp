@@ -118,8 +118,7 @@ int main(int argc, char **argv)
     }
   
     freeaddrinfo(servinfo);
-
-
+    
     if (-1 == listen(socket_fd, BACKLOG)) {
         perror("listen");
         exit(1);
@@ -144,7 +143,13 @@ int main(int argc, char **argv)
             perror("accept");
             exit(1);
         }
-        fork_num++;
+
+        
+        if (-1 == listen(socket_fd, BACKLOG)) {
+            perror("listen");
+            exit(1);
+        }
+            fork_num++;
         if(!fork()) {
             close(socket_fd);
             //Read initial header
