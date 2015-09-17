@@ -14,13 +14,15 @@
 #include <signal.h>
 #include <sys/sendfile.h>
 
-#define SERV_PORT "8097" 
 #define BACKLOG 10
+char PORT[64] = {"\0"};
+char DOC_ROOT[512] = {"\0"};
+
 
 int getFullFilePath(char *path, char *fullFilePath, char *type)
 {
+    strcpy(fullFilePath, DOC_ROOT);
     size_t len = strlen(path);
-    getcwd(fullFilePath, 64);
     fprintf(stderr, "path[len-1]: %c, path[len]: %c\n", path[len-1], path[len]);
     if ('/' == path[len-1]) {
         strcat(fullFilePath, "/index.html");
@@ -50,8 +52,11 @@ int getFullFilePath(char *path, char *fullFilePath, char *type)
     else if (NULL != strstr(fullFilePath, ".js")) { 
         strcpy(type, "text/javascript\0");
     }
-    else if (NULL != strstr(fullFilePath, "x-icon")) { 
+    else if (NULL != strstr(fullFilePath, ".ico")) { 
         strcpy(type, "image/x-icon\0");
+    }
+    else if (NULL != strstr(fullFilePath, ".txt")) {
+        strcpy(type, "text/plain\0");
     }
     else {
         //not supported send 503?
@@ -99,19 +104,50 @@ int main(int argc, char **argv)
     int yes = 1;
     int num_bytes;
     char s[INET6_ADDRSTRLEN];
-    
+    FILE *CONFIG_FILE;
+    size_t len;
+    char * line = NULL;
 
     timeout.tv_sec = 10;
     timeout.tv_usec = 0;
 
     //TODO:read in config file here
-    getcwd(fullPath, 64);
+
+    if (NULL == (CONFIG_FILE = fopen(argv[1], "r"))) {
+        fprintf(stderr, "failed to open config file...");
+        exit(0);
+    }
+    printf("1\n");
+    while (-1 != (len = getline(&line, &len, CONFIG_FILE))) {
+        if(line[0] == ' ' || line[0] == '#') {
+            free(line);
+            line = NULL;
+            continue;
+        }
+        if(strstr(line, "Listen")) {
+            sscanf(line, "%*s %s", PORT);
+            printf("PORT is: %s", PORT);
+            free(line);
+            line = NULL;
+            continue;
+        }
+        if(strstr(line, "DocumentRoot")) {
+            sscanf(line, "%*s %s\n", DOC_ROOT);
+            printf("DOC_ROOT is: %s\n", DOC_ROOT);
+            free(line);
+            line = NULL;
+        }
+
+    }
+
+
+    strcpy(fullPath, DOC_ROOT);
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM; 
     hints.ai_flags = AI_PASSIVE;
 
-    if ((status = getaddrinfo(NULL, SERV_PORT, &hints, &servinfo)) != 0) {
+    if ((status = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
         exit(1);
     }
@@ -181,7 +217,6 @@ int main(int argc, char **argv)
                 printf("Command: %s, PATH: %s, Version: %s\n", command, path, version);
                 
                if (!getFullFilePath(path, fullPath, type)) {
-                    //503 unsupported type
                
                     fprintf(stderr,"Full File Path: %s\n", fullPath);
                     fprintf(stderr, "Type: %s\n", type);
