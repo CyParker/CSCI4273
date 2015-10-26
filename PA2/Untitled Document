@@ -1,0 +1,3 @@
+AUTHOR: Cy Parker
+usage: client dfc.conf server "homedir" "port"
+compile g++ -oclient.exe client.cpp, g++ -oserver.exe client.cpp

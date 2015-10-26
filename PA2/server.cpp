@@ -19,9 +19,9 @@
 char DOC_ROOT[512] = {"\0"};
 char PORT[64] = {"\0"};
 
-void auth(char *usr, char *passwd)
+bool auth(char *usr, char *passwd, FILE *AUTH_FILE )
 {
-
+    
 }
 
 
@@ -65,7 +65,8 @@ int main(int argc, char **argv)
     char * line = NULL;
     DIR *dir;
     struct dirent *ent;
-
+    char dirlist[1024] = {'\0'};
+    
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
 
@@ -130,91 +131,167 @@ int main(int argc, char **argv)
 
         if(!fork()) {
             close(socket_fd);
-            if ( -1 == setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof(timeout))) {
-                fprintf(stderr, "setsockopt:2 failed");
-            }
-
+           // if ( -1 == setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof(timeout))) {
+           //     fprintf(stderr, "setsockopt:2 failed");
+           // }
+            printf("Server: waiting for command\n");
             if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
 
                 perror("read header");
                 close(client_fd);
                 exit(0);
             }
-            
+           printf("Server: got command\n"); 
             while(1){
 
                 header_buffer[num_bytes] = '\0';
                 //parse initial header
-                char cmd[8]= {header_buffer[0], header_buffer[1], header_buffer[2], header_buffer[3]};
+                char cmd[8]= {header_buffer[0], header_buffer[1], header_buffer[2], header_buffer[3], header_buffer[4], '\0'};
+                printf("CMD: %s", cmd);
                 if (strstr(cmd, "LIST")) {
-                    sscanf(header_buffer, "%s %s %s %*s", command, usr, passwd);
+                    char LFP[1024] = {'\0'};
+                    dirlist[0] = '\0';
+                    sscanf(header_buffer, "%s %s %s", command, usr, passwd);
                     //check usr passwd
                     //get full path, if not exist create
-                    if ((dir = opendir("")))
-                } else if(strstr(cmd, "get")) {
-                    sscanf(header_buffer, "%s %s %s %*s", command, path, usr, passwd);
-                } else if(strstr(cmd, "PUT")) {
-                
-                    sscanf(header_buffer, "%s %s %s %*s", command, path, usr, passwd);
-                }
-
-                printf("The Header is: %s\n", header_buffer);
-                printf("Command: %s, PATH: %s, usr: %s, passwd: %s,\n", command, path, usr, passwd);
-                
-               if (!getFullFilePath(path, fullPath, type)) {
-               
-                    fprintf(stderr,"Full File Path: %s\n", fullPath);
-                    fprintf(stderr, "Type: %s\n", type);
-
-
-                    send_fd = open(fullPath, O_RDONLY);
-                    if(-1 != send_fd) {
-
-                        fstat(send_fd, &stat_buf);
-                        if (strstr(version, "HTTP/1.1")) {
-                             sprintf(header_buffer, "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\nConnection: keep-alive\r\n\r\n",version,  type, stat_buf.st_size);
-                        } else if (strstr(version, "HTTP/1.0"))  {
-                             sprintf(header_buffer, "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %li\r\n\r\n",version,  type, stat_buf.st_size);
-                        } else {
-                            //POORLY FORMATED HEADER
-                            sprintf(header_buffer, "%s 400 Invalid HTTP-Version: %s", version, version);
+                    strcpy(LFP, DOC_ROOT);
+                    strcat(LFP, "//");
+                    strcat(LFP, usr);
+                    if (NULL != (dir = opendir(LFP))) {
+                        while(NULL != (ent = readdir(dir))) {
+                            if((!strcmp(ent->d_name, "..")) || (!strcmp(ent->d_name, ".")))
+                                continue;
+                            strcat(dirlist ,ent->d_name);
+                            strcat(dirlist, " ");
                         }
-                        send(client_fd, header_buffer, strlen(header_buffer), 0);
-                        
-                        off_t offset = 0;
-                        int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
-                        if( -1 == rc) {
-                            fprintf(stderr, "failed to sendfile\n");
-                        }            
-
-                        if (rc != stat_buf.st_size) {
-                           fprintf(stderr, "didnt send the entire buffer\n");
-                        }
-
+                        closedir(dir);
                     } else {
-                        fprintf(stderr, "Failed to open file\n");
-                        //send file DNE
-                        sprintf(header_buffer, "%s 404 Not Found: %s", version, fullPath);
-
-                        send(client_fd, header_buffer, strlen(header_buffer), 0); 
+                        char sysString[512] = "mkdir -p ";
+                        strcat(sysString, LFP);
+                        system(sysString);
+                        if (NULL != (dir = opendir(LFP))) {
+                            while(NULL != (ent = readdir(dir))) {
+                                strcat(dirlist ,ent->d_name);
+                                strcat(dirlist, " ");
+                            }
+                            closedir(dir);
+                        }
                     }
+                    //send dirlis
+                    send(client_fd, dirlist, strlen(dirlist), 0);
 
-                } else {
-                    //send file UNSUPPORTED
-                    sprintf(header_buffer, "%s 501 Not Implemented: %s", version, fullPath);
-                    send(client_fd, header_buffer, strlen(header_buffer), 0);
+                } else if(strstr(cmd, "GET")) {
+                    char GFP[1024] = {'\0'};
+                    sscanf(header_buffer, "%s %s %s %s", command, path, usr, passwd);
+                    printf("COMMAND: %s\n", command);
+                    printf("path: %s\n", path);
+                    //auth
+                    strcpy(GFP, DOC_ROOT);
+                    strcat(GFP, "/");
+                    strcat(GFP, usr);
+                    if (NULL != (dir = opendir(GFP))) {
+                        size_t count = 0;
+                        while(NULL != (ent = readdir(dir))) {
+                            printf("%s \n", ent->d_name);
+                            if(!strstr(ent->d_name, path))
+                                continue;
+                            //sendfilename
+                            char fullname[1024] = {'\0'};
+                            strcpy(fullname, GFP);
+                            strcat(fullname, "/");
+                            strcat(fullname, ent->d_name);
+                            printf("GET SENDING NAME: %s\n", fullname);
+                            send(client_fd, ent->d_name, strlen(ent->d_name), 0);
+                            sleep(1);
+                            //sendfile
+                            send_fd = open(fullname, O_RDONLY);
+                            perror("send_fd\n");
+                            if(-1 != send_fd) {
+
+                                fstat(send_fd, &stat_buf);
+                       
+                                off_t offset = 0;
+                                int rc = sendfile(client_fd, send_fd, &offset, stat_buf.st_size);
+                               sleep(1);
+                                if( -1 == rc) {
+                                    fprintf(stderr, "failed to sendfile\n");
+                                }            
+
+                                if (rc != stat_buf.st_size) {
+                                    fprintf(stderr, "didnt send the entire buffer\n");
+                                }
+
+                                } else {
+                                    fprintf(stderr, "Failed to open file\n");
+                                    //send file DNE
+                                    sprintf(header_buffer, "Not Found: %s", ent->d_name);
+    
+                                    send(client_fd, header_buffer, strlen(header_buffer), 0); 
+                                }
+
+                            if(++count == 2)
+                                break;
+                        }
+                        closedir(dir);
+                    } else {
+                        //senderror
+                    }
+                } else if(strstr(cmd, "PUT")) {
+                    char file1[1024];
+                    char file2[1024];
+                    char name1[64];
+                    char name2[64];
+                    char num1[16];
+                    char num2[16];
+                    char recv_buffer[1024];
+                    int bytes;
+                    char PFP[1024] = {'\0'};
+                    char P1[1024] = {'\0'};
+                    char P2[1024] = {'\0'};
+                    sscanf(header_buffer, "%s %s %s %s", command, path, usr, passwd);
+                    strcpy(PFP, DOC_ROOT);
+                    strcat(PFP, usr);
+                    //get files (2)
+                    //getname and numbers
+                    if (-1 == (num_bytes = recv(client_fd, recv_buffer, 1023, 0))) {
+                        fprintf(stderr, "timeout or failed to recv\n");
+                        close(client_fd);
+                        exit(0);
+                    }
+                    sscanf(recv_buffer, "%s %s %s", name1, num1, num2);
+                    strcpy(name2, name1);
+                    strcat(name1, num1);
+                    strcat(name2, num2);
+                    printf("NAME: %s\n", recv_buffer);
+                    //recv 1                    
+                    if (-1 == (num_bytes = recv(client_fd, file1, 1024, 0))) {
+                        fprintf(stderr, "timeout or failed to recv\n");
+                        close(client_fd);
+                        exit(0);
+                    }
+                    strcpy(P1, PFP);
+                    strcat(P1, name1);
+                    FILE *fileptr = fopen(P1, "w");
+                    fwrite(file1, sizeof(char), num_bytes, fileptr);
+                    fclose(fileptr);
+                    //recv 2
+                    if (-1 == (num_bytes = recv(client_fd, file2, 1024, 0))) {
+                        fprintf(stderr, "timeout or failed to recv\n");
+                        close(client_fd);
+                        exit(0);
+                    }
+                    fileptr = fopen(P2, "w");
+                    fwrite(file2, sizeof(char), num_bytes, fileptr);
+                    fclose(fileptr);
+
+
                 }
-
-                fprintf(stderr, "\n\nRESPONSE\n\n%s\n\n",header_buffer);
                 
-                close(send_fd);
-
-                if (-1 == (num_bytes = recv(client_fd, header_buffer, 511, 0))) {
+                if (-1 == (num_bytes = recv(client_fd, header_buffer, 1024, 0))) {
                     fprintf(stderr, "timeout or failed to recv\n");
                     close(client_fd);
                     exit(0);
                 }
-
             }
         }
 
