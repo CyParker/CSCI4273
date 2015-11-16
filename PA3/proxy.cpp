@@ -133,33 +133,42 @@ int main(int argc, char **argv)
                     char * temp = NULL;
                     char * host = NULL;
                     int sockdest, idx;
-                    char recvbuff[65535] = {"\0"};
+                    char recvbuff[512] = {"\0"};
                     char sendbuff[1024] = {"\0"};
                     bool hasPort = false;
-                    char port[16];
+                    char *port = NULL;
                     char cmdcpy[512] = {"\0"};
 
 
                     //path is http://google.com:8080/asdfasdfasdfasdf/asdfasdf/asdfasdf
                     //path is http://google.com/asdfasdf/asdf/asdf
-                    if(NULL !=(strchr(path, ':')))
+                    strcat(path, "^]");
+                    temp = strtok(path, "//");
+                    printf("\nPath without http:// => %s\n", temp);
+                    if(NULL !=(strchr(&path[7], ':')))
                     {
                         hasPort = true;
-                    }
-                    
-                    temp = strtok(path, "//");
-                    if(hasPort) {
-                        host = strtok(NULL, ":");
-                        port = strtok(NULL, "/");
-                    } else {
-                        strcpy(port, "80");
-                        host = strtok(NULL, "/");
+                        printf("The path has a port!!\n");
                     }
 
+                    if(hasPort) {
+                        temp = strtok(NULL, ":");
+                        host = temp;
+                        temp = strtok(NULL, "/");
+                        port = temp;
+                    } else {
+                        port = (char *)  malloc(3);
+                        strcpy(port, "80");
+                        temp = strtok(NULL, "/");
+                        host = temp;
+                    }
+                    temp = strtok(NULL, "^]");
+                    
                     memset(&hh, 0, sizeof(hh));
                     hh.ai_family = AF_UNSPEC;
                     hh.ai_socktype = SOCK_STREAM;
                     getaddrinfo(host, port, &hints, &r);
+                    free(port);
                     printf("\nHost is: %s\n", host);
                     sockdest = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
                     connect(sockdest, r->ai_addr, r->ai_addrlen);
@@ -168,17 +177,18 @@ int main(int argc, char **argv)
                     } else { //get root
                         sprintf(sendbuff, "GET / %s\r\nHost: %s\r\nConnection: close\r\n\r\n", version, host);
                     }
-                    if(-1 == send(sockdest, header_buffer, strlen(header_buffer), 0)) {
+
+                    printf("\n%s\n", sendbuff);
+                    if(-1 == send(sockdest, sendbuff, strlen(sendbuff), 0)){ 
                         perror("Failed to send to dest");
                     }
-                    if((num_bytes = recv(sockdest, recvbuff, 65534, 0)) == -1){
+                    do{
+                    if((num_bytes = recv(sockdest, recvbuff, 512, 0)) <= 0){
                         perror("failed to recv from dest");
-                    }
-                    recvbuff[num_bytes] = '\0';
-                    printf("Sending to mozilla:\n\n %s\n", recvbuff);
-                    if(-1 == send(client_fd, recvbuff, strlen(recvbuff), 0)){
-                        perror("failed to send back to client");
-                    }
+                        break;
+                    } 
+                        send(client_fd, recvbuff, num_bytes, 0);
+                    }while(num_bytes > 0);
                     close(sockdest);
 
 
